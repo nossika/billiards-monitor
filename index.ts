@@ -4,7 +4,7 @@ type Mass = number; // 质量 m
 type Radius = number; // 半径 r
 type Color = string; // 颜色，如 #aabbcc
 type Angle = number; // 角度，范围 0 - 360
-type Friction = number; // 摩擦系数，范围 0 - 1，越小表示摩擦力越小
+type Friction = number; // 摩擦系数，>= 0，越小表示摩擦力越小
 type Elastic = number; // 弹性，范围 0 - 1，越大表示弹性越好
 
 class Ball {
@@ -16,6 +16,7 @@ class Ball {
   vy: Velocity;
   color: Color;
   cue: boolean;
+  elastic: Elastic;
 
   constructor({
     x,
@@ -26,6 +27,7 @@ class Ball {
     vy = 0,
     color = 'black',
     cue = false,
+    elastic = 1,
   }: {
     x: Position;
     y: Position;
@@ -35,6 +37,7 @@ class Ball {
     vy?: Velocity;
     color?: Color;
     cue?: boolean;
+    elastic?: Elastic;
   }) {
     this.x = x;
     this.y = y;
@@ -44,6 +47,7 @@ class Ball {
     this.vy = vy;
     this.color = color;
     this.cue = cue;
+    this.elastic = elastic;
   }
 
   update(frames = 1) {
@@ -60,25 +64,25 @@ class Ball {
     ctx.fill();
   }
 
-  collideEdgeMaybe(top: Position, left: Position, bottom: Position, right: Position) {
+  collideEdgeMaybe(top: Position, left: Position, bottom: Position, right: Position, edgeElastic: Elastic) {
     if ((this.x - this.r < left && this.vx < 0) || (this.x + this.r > right && this.vx > 0)) {
-      this.collideEdge('x');
+      this.collideEdge('x', edgeElastic);
       return true;
     }
 
     if ((this.y - this.r < top && this.vy < 0) || (this.y + this.r > bottom && this.vy > 0)) {
-      this.collideEdge('y');
+      this.collideEdge('y', edgeElastic);
       return true;
     }
 
     return false;
   }
 
-  private collideEdge(edge: 'x' | 'y') {
+  private collideEdge(edge: 'x' | 'y', edgeElastic: Elastic) {
     if (edge === 'x') {
-      this.vx = -this.vx;
+      this.vx = -this.vx * Math.min(edgeElastic, this.elastic);
     } else if (edge === 'y') {
-      this.vy = -this.vy;
+      this.vy = -this.vy * Math.min(edgeElastic, this.elastic);
     }
   }
 
@@ -121,6 +125,8 @@ class Ball {
     if (selfVelocityOnCollide - targetVelocityOnCollide >= 0) return;
 
     // --- 碰撞后 ---
+    // 两球的弹性取小
+    const elasticMin = Math.min(this.elastic, target.elastic);
     // 自身球在碰撞方向上的速度
     const selfVelecityOnCollideAfter = Ball.velocityAfterCollide(selfVelocityOnCollide, targetVelocityOnCollide, this.m, target.m);
     // 自身球在碰撞方向上的速度向量
@@ -128,8 +134,8 @@ class Ball {
     // 自身球的速度向量
     const selfMergeVelocityVector = selfVelocityVectorOnCollideVertical.add(selfVelecityVectorOnCollideAfter);
     // 更新自身球碰撞后的速度信息
-    this.vx = selfMergeVelocityVector.x;
-    this.vy = selfMergeVelocityVector.y;
+    this.vx = selfMergeVelocityVector.x * elasticMin;
+    this.vy = selfMergeVelocityVector.y * elasticMin;
 
     // 目标球在碰撞方向上的速度
     const targetVelecityOnCollideAfter = Ball.velocityAfterCollide(targetVelocityOnCollide, selfVelocityOnCollide, target.m, this.m);
@@ -138,8 +144,8 @@ class Ball {
     // 目标球的速度向量
     const targetMergeVelocityVector = targetVelocityVectorOnCollideVertical.add(targetVelecityVectorOnCollideAfter);
     // 更新目标球碰撞后的速度信息
-    target.vx = targetMergeVelocityVector.x;
-    target.vy = targetMergeVelocityVector.y;
+    target.vx = targetMergeVelocityVector.x * elasticMin;
+    target.vy = targetMergeVelocityVector.y * elasticMin;
   }
 
   static velocityAfterCollide(v: Velocity, targetV: Velocity, m: Mass, targetM: Mass) {
@@ -220,7 +226,7 @@ class Table {
   private balls: Set<Ball>;
   private width: number;
   private height: number;
-  private scrollDepletionRate: number;
+  private scrollFriction: Friction;
   private edgeElastic: Elastic;
   private isPause: boolean;
   private renderNextFrame: (render: () => void) => void;
@@ -248,9 +254,8 @@ class Table {
     this.width = canvas.width;
     this.height = canvas.height;
     this.isPause = false;
-
+    this.scrollFriction = scrollFriction;
     this.edgeElastic = edgeElastic;
-    this.scrollDepletionRate = 1 - scrollFriction;
     this.renderNextFrame = renderNextFrame;
   }
 
@@ -291,7 +296,8 @@ class Table {
     return {
       width: this.width,
       height: this.height,
-      scrollDepletionRate: this.scrollDepletionRate,
+      scrollFriction: this.scrollFriction,
+      edgeElastic: this.edgeElastic,
     };
   }
 
@@ -321,15 +327,25 @@ class Table {
     // 必须先完成全部位置更新，再判断碰撞
     for (const ball of this.balls) {
       ball.update();
-      ball.vx = util.formatNum(ball.vx * this.scrollDepletionRate);
-      ball.vy = util.formatNum(ball.vy * this.scrollDepletionRate);
+
+      if (Math.abs(ball.vx) > this.scrollFriction) {
+        ball.vx = ball.vx > 0 ? ball.vx - this.scrollFriction : ball.vx + this.scrollFriction;
+      }
+
+      ball.vx = util.formatNum(ball.vx, this.scrollFriction);
+      
+      if (Math.abs(ball.vy) > this.scrollFriction) {
+        ball.vy = ball.vy > 0 ? ball.vy - this.scrollFriction : ball.vy + this.scrollFriction;
+      }
+
+      ball.vy = util.formatNum(ball.vy, this.scrollFriction);
     }
 
     const collidedBalls = new Set();
 
     // 判断碰撞
     for (const ball of this.balls) {
-      ball.collideEdgeMaybe(0, 0, this.height, this.width);
+      ball.collideEdgeMaybe(0, 0, this.height, this.width, this.edgeElastic);
 
       for (const otherBall of this.balls) {
         if (ball === otherBall) continue;
@@ -373,8 +389,8 @@ table.addBall(
 table.go(() => {
   console.log('stop');
 
-  table.cueBall.vx = 5;
-  table.cueBall.vy = 5;
+  table.cueBall.vx = 8;
+  table.cueBall.vy = 8;
   table.go();
 });
 
