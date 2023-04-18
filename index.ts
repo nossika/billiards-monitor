@@ -15,7 +15,6 @@ class Ball {
   vx: Velocity;
   vy: Velocity;
   color: Color;
-  cue: boolean;
   elastic: Elastic;
 
   constructor({
@@ -26,7 +25,6 @@ class Ball {
     vx = 0,
     vy = 0,
     color = 'black',
-    cue = false,
     elastic = 1,
   }: {
     x: Position;
@@ -36,7 +34,6 @@ class Ball {
     vx?: Velocity;
     vy?: Velocity;
     color?: Color;
-    cue?: boolean;
     elastic?: Elastic;
   }) {
     this.x = x;
@@ -46,7 +43,6 @@ class Ball {
     this.vx = vx;
     this.vy = vy;
     this.color = color;
-    this.cue = cue;
     this.elastic = elastic;
   }
 
@@ -57,33 +53,18 @@ class Ball {
     }
   }
 
-  render(ctx: CanvasRenderingContext2D) {
-    ctx.beginPath();
-    ctx.fillStyle = this.color;
-    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  collideEdgeMaybe(top: Position, left: Position, bottom: Position, right: Position, edgeElastic: Elastic) {
-    if ((this.x - this.r < left && this.vx < 0) || (this.x + this.r > right && this.vx > 0)) {
-      this.collideEdge('x', edgeElastic);
+  collideEdgeMaybe(d: { top: Position, left: Position, bottom: Position, right: Position, edgeElastic: Elastic }) {
+    if ((this.x - this.r < d.left && this.vx < 0) || (this.x + this.r > d.right && this.vx > 0)) {
+      this.collideEdge('x', d.edgeElastic);
       return true;
     }
 
-    if ((this.y - this.r < top && this.vy < 0) || (this.y + this.r > bottom && this.vy > 0)) {
-      this.collideEdge('y', edgeElastic);
+    if ((this.y - this.r < d.top && this.vy < 0) || (this.y + this.r > d.bottom && this.vy > 0)) {
+      this.collideEdge('y', d.edgeElastic);
       return true;
     }
 
     return false;
-  }
-
-  private collideEdge(edge: 'x' | 'y', edgeElastic: Elastic) {
-    if (edge === 'x') {
-      this.vx = -this.vx * Math.min(edgeElastic, this.elastic);
-    } else if (edge === 'y') {
-      this.vy = -this.vy * Math.min(edgeElastic, this.elastic);
-    }
   }
 
   collideBallMaybe(target: Ball) {
@@ -94,6 +75,14 @@ class Ball {
     this.collideBall(target);
 
     return true;
+  }
+
+  private collideEdge(edge: 'x' | 'y', edgeElastic: Elastic) {
+    if (edge === 'x') {
+      this.vx = -this.vx * Math.min(edgeElastic, this.elastic);
+    } else if (edge === 'y') {
+      this.vy = -this.vy * Math.min(edgeElastic, this.elastic);
+    }
   }
 
   private collideBall(target: Ball) {
@@ -220,15 +209,68 @@ const util = {
   },
 };
 
-class Table {
-  canvas: HTMLCanvasElement;
+class Renderer {
   private ctx: CanvasRenderingContext2D;
+  private width: number;
+  private height: number;
+
+  constructor(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    this.ctx = ctx;
+    this.width = width;
+    this.height = height;
+  }
+
+  clear() {
+    this.ctx.clearRect(0, 0, this.width, this.height);
+  }
+
+  renderBall(x: Position, y: Position, r: Radius, color: Color = 'black') {
+    const { ctx } = this;
+
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  renderStick(x: Position, y: Position, targetX: Position, targetY: Position, color: Color = 'black') {
+    this.clear();
+    const { ctx } = this;
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(targetX, targetY);
+    ctx.closePath();
+    ctx.setLineDash([6]);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+
+    const targetVector = new Vector2D(targetX - x, targetY - y);
+    const stickVector = targetVector.rotate(180).normalize();
+    const stickLengthVector = stickVector.scaleBy(50);
+    const stickMarginVector = stickVector.scaleBy(targetVector.length / 3);
+
+    ctx.beginPath();
+    ctx.moveTo(x + stickMarginVector.x, y + stickMarginVector.y);
+    ctx.lineTo(x + stickMarginVector.x + stickLengthVector.x, y + stickMarginVector.y + stickLengthVector.y);
+    ctx.closePath();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
+}
+
+class Table {
+  cueBall?: Ball | undefined;
+  private container: HTMLElement;
+  private tableRenderer: Renderer;
+  private controlRenderer: Renderer;
   private balls: Set<Ball>;
   private width: number;
   private height: number;
   private scrollFriction: Friction;
   private edgeElastic: Elastic;
-  private isPause: boolean;
+  private isGoing: boolean;
   private renderNextFrame: (render: () => void) => void;
 
   constructor({
@@ -237,30 +279,48 @@ class Table {
     scrollFriction = 0.01,
     edgeElastic = 0.9,
     renderNextFrame = window.requestAnimationFrame.bind(window),
+    style,
   }: {
     width: number,
     height: number,
     scrollFriction?: Friction,
     edgeElastic?: Elastic,
     renderNextFrame?: (render: () => void) => void,
+    style?: Partial<CSSStyleDeclaration>,
   }) {
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d')!;
+    const tableCanvas = document.createElement('canvas');
+    tableCanvas.width = width;
+    tableCanvas.height = height;
+    this.tableRenderer = new Renderer(tableCanvas.getContext('2d')!, width, height);
+
+    const controlCanvas = document.createElement('canvas');
+    controlCanvas.style.position = 'absolute';
+    controlCanvas.style.top = '0';
+    controlCanvas.style.left = '0';
+    controlCanvas.width = width;
+    controlCanvas.height = height;
+    this.controlRenderer = new Renderer(controlCanvas.getContext('2d')!, width, height);
+
+    const container = document.createElement('div');
+    Object.assign(container.style, style);
+    container.appendChild(tableCanvas);
+    container.appendChild(controlCanvas);
+    this.container = container;
+    container.style.width = `${width}px`;
+    container.style.height = `${height}px`;
+    container.style.position = 'relative';
 
     this.balls = new Set();
-    this.width = canvas.width;
-    this.height = canvas.height;
-    this.isPause = false;
+    this.width = width;
+    this.height = height;
     this.scrollFriction = scrollFriction;
     this.edgeElastic = edgeElastic;
     this.renderNextFrame = renderNextFrame;
   }
 
-  mount(container: HTMLElement) {
-    container.appendChild(this.canvas);
+  mount(node: HTMLElement) {
+    node.appendChild(this.container);
+    return this;
   }
 
   addBall(...balls: Ball[]) {
@@ -271,24 +331,81 @@ class Table {
     return this.balls.delete(ball);
   }
 
-  pause() {
-    this.isPause = true;
+  go(onStop?: () => void) {
+    if (this.isGoing) return;
+    this.isGoing = true;
+    this.loopRender(() => {
+      this.isGoing = false;
+      onStop?.();
+    });
   }
 
-  resume() {
-    this.isPause = false;
+  strikeBall(v: Vector2D, ball: Ball = this.cueBall) {
+    if (!ball) return;
+    ball.vx = v.x;
+    ball.vy = v.y;
     this.go();
   }
 
-  go(onStop?: () => void) {
-    if (table.isStatic || table.isPause) {
-      onStop?.();
-      return;
-    }
+  onClick(onClick: (data: {
+    targetX: Position;
+    targetY: Position;
+    ballX: Position;
+    ballY: Position;
+    relativeX: Position;
+    relativeY: Position;
+  }) => void, relativeBall: Ball = this.cueBall) {
+    return this.container.addEventListener('click', (e) => {
+      if (this.isGoing) return;
 
-    this.renderNextFrame(() => {
-      this.render();
-      this.go(onStop);
+      const targetX = e.offsetX;
+      const targetY = e.offsetY;
+
+      const ballX = relativeBall?.x;
+      const ballY = relativeBall?.y;
+
+      const relativeX = targetX - ballX;
+      const relativeY = targetY - ballY;
+
+      onClick({
+        targetX,
+        targetY,
+        ballX,
+        ballY,
+        relativeX,
+        relativeY,
+      });
+    });
+  }
+
+  onMousemove(onClick: (data: {
+    targetX: Position;
+    targetY: Position;
+    ballX: Position;
+    ballY: Position;
+    relativeX: Position;
+    relativeY: Position;
+  }) => void, relativeBall: Ball = this.cueBall) {
+    return this.container.addEventListener('mousemove', (e) => {
+      if (this.isGoing) return;
+
+      const targetX = e.offsetX;
+      const targetY = e.offsetY;
+
+      const ballX = relativeBall?.x;
+      const ballY = relativeBall?.y;
+
+      const relativeX = targetX - ballX;
+      const relativeY = targetY - ballY;
+
+      onClick({
+        targetX,
+        targetY,
+        ballX,
+        ballY,
+        relativeX,
+        relativeY,
+      });
     });
   }
 
@@ -301,16 +418,6 @@ class Table {
     };
   }
 
-  get cueBall() {
-    for (const ball of this.balls) {
-      if (ball.cue) {
-        return ball;
-      }
-    }
-
-    return null;
-  }
-
   get isStatic() {
     for (const ball of this.balls) {
       if (!ball.isStatic) {
@@ -321,8 +428,27 @@ class Table {
     return true;
   }
 
+  get renderer() {
+    return {
+      tableRenderer: this.tableRenderer,
+      controlRenderer: this.controlRenderer,
+    };
+  }
+
+  private loopRender(onLoopStop: () => void) {
+    if (table.isStatic) {
+      onLoopStop?.();
+      return;
+    }
+
+    this.renderNextFrame(() => {
+      this.render();
+      this.loopRender(onLoopStop);
+    });
+  }
+
   private render() {
-    this.ctx.clearRect(0, 0, this.width, this.height);
+    this.tableRenderer.clear();
 
     // 必须先完成全部位置更新，再判断碰撞
     for (const ball of this.balls) {
@@ -333,7 +459,7 @@ class Table {
       }
 
       ball.vx = util.formatNum(ball.vx, this.scrollFriction);
-      
+
       if (Math.abs(ball.vy) > this.scrollFriction) {
         ball.vy = ball.vy > 0 ? ball.vy - this.scrollFriction : ball.vy + this.scrollFriction;
       }
@@ -345,7 +471,7 @@ class Table {
 
     // 判断碰撞
     for (const ball of this.balls) {
-      ball.collideEdgeMaybe(0, 0, this.height, this.width, this.edgeElastic);
+      ball.collideEdgeMaybe({ top: 0, left: 0, bottom: this.height, right: this.width, edgeElastic: this.edgeElastic });
 
       for (const otherBall of this.balls) {
         if (ball === otherBall) continue;
@@ -359,39 +485,43 @@ class Table {
         }
       }
 
-      ball.render(this.ctx);
+      this.tableRenderer.renderBall(ball.x, ball.y, ball.r, ball.color);
     }
   }
 }
 
 // --- test code ---
-
-const canvas = document.querySelector('#canvas') as HTMLCanvasElement;
-
 const table = new Table({
-  width: 800,
-  height: 600,
-});
+  width: 600,
+  height: 400,
+  style: {
+    backgroundColor: 'olivedrab',
+  },
+}).mount(document.body);
 
-table.canvas.style.backgroundColor = 'olivedrab';
-table.mount(document.body);
-
-table.addBall(
+const cueBall = new Ball({ color: 'white', x: 150, y: 50, vy: 0, r: 20 });
+const balls: Ball[] = [
   new Ball({ color: 'red', x: 200, y: 200, vy: -1, vx: 2, r: 8 }),
   new Ball({ color: 'blue', x: 50, y: 50, vy: 2, r: 15 }),
   new Ball({ color: 'blue', x: 250, y: 50, vy: 2, r: 15 }),
   new Ball({ color: 'cyan', x: 50, y: 150, vy: -1 }),
   new Ball({ color: 'cyan', x: 250, y: 150, vy: 1 }),
   new Ball({ color: 'black', x: 150, y: 150, vy: -3, vx: 0, m: 2000 }),
-  new Ball({ color: 'white', x: 150, y: 50, vy: 0, r: 20, cue: true }),
-);
+].concat(cueBall);
+
+table.addBall(...balls);
+table.cueBall = cueBall;
 
 table.go(() => {
   console.log('stop');
+});
 
-  table.cueBall.vx = 8;
-  table.cueBall.vy = 8;
-  table.go();
+table.onClick((data) => {
+  table.strikeBall(new Vector2D(data.relativeX / 10, data.relativeY / 10));
+});
+
+table.onMousemove((data) => {
+  table.renderer.controlRenderer.renderStick(data.ballX, data.ballY, data.targetX, data.targetY);
 });
 
 (window as any).table = table;
