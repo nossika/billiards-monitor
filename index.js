@@ -25,11 +25,24 @@ class Ball {
         return false;
     }
     collideBallMaybe(target) {
-        if (Math.pow((this.r + target.r), 2) <= Math.pow((this.x - target.x), 2) + Math.pow((this.y - target.y), 2)) {
+        if (this.r + target.r <= util.distance(this.x, this.y, target.x, target.y)) {
             return false;
         }
         this.collideBall(target);
         return true;
+    }
+    fallInHoleMaybe(hole) {
+        // 如果球大于洞，则必定不会落入
+        if (hole.r < this.r)
+            return false;
+        const distance = util.distance(this.x, this.y, hole.x, hole.y);
+        // 无论运动静止，球整体位于洞内，视为落入
+        if (distance < hole.r - this.r)
+            return true;
+        // 静止时，球心在洞内，视为落入
+        if (!this.vx && !this.vy && distance < hole.r)
+            return true;
+        return false;
     }
     collideEdge(edge, edgeElastic) {
         if (edge === 'x') {
@@ -142,6 +155,9 @@ const util = {
     formatNum(num, min = 0.001) {
         return Math.abs(num) < min ? 0 : num;
     },
+    distance(x1, y1, x2, y2) {
+        return Math.sqrt(Math.pow((x2 - x1), 2) + Math.pow((y2 - y1), 2));
+    },
     create2DCanvas(props) {
         const { container, width, height, origin, style } = props;
         const canvas = document.createElement('canvas');
@@ -207,10 +223,18 @@ class Renderer {
         ctx.fillRect(this.x, this.y + this.h - border, this.w, border);
         ctx.fillRect(this.x + this.w - border, this.y, border, this.h);
     }
+    renderHole(x, y, r, color = 'black') {
+        const { ctx } = this;
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
 }
 class Table {
     constructor({ width, height, border = 10, scrollFriction = 0.01, edgeElastic = 0.9, renderNextFrame = window.requestAnimationFrame.bind(window), styles, }) {
         this.balls = new Set();
+        this.holes = new Set();
         const containerWidth = width + border * 2;
         const containerHeight = height + border * 2;
         const container = document.createElement('div');
@@ -258,23 +282,43 @@ class Table {
     }
     mount(node) {
         node.appendChild(this.container);
+        this.parentNode = node;
         return this;
     }
-    init({ cueBall, balls = [], }) {
+    unmount() {
+        var _a;
+        (_a = this.parentNode) === null || _a === void 0 ? void 0 : _a.removeChild(this.container);
+    }
+    init({ cueBall, balls = [], holes = [], }) {
+        this.balls = new Set();
+        this.holes = new Set();
         this.cueBall = cueBall;
         this.addBall(cueBall);
         this.addBall(...balls);
+        this.addHole(...holes);
     }
-    start() {
+    start(events) {
         if (!this.cueBall) {
-            throw new Error('can not start before table.init()');
+            throw new Error('can not start without a cue ball');
         }
         this.go();
         this.onClick((data) => {
             if (!this.status.isStatic)
                 return;
             console.log(`strike!!! x: ${data.relativeX}, y:${data.relativeY}`);
-            this.strikeBall(new Vector2D(data.relativeX / 10, data.relativeY / 10), this.cueBall, () => console.log('done'));
+            const onDone = () => {
+                var _a, _b;
+                if (!this.balls.has(this.cueBall)) {
+                    (_a = events === null || events === void 0 ? void 0 : events.onCueBallFall) === null || _a === void 0 ? void 0 : _a.call(events);
+                    return;
+                }
+                if (this.balls.size <= 1) {
+                    (_b = events === null || events === void 0 ? void 0 : events.onClear) === null || _b === void 0 ? void 0 : _b.call(events);
+                    return;
+                }
+                console.log('done');
+            };
+            this.strikeBall(new Vector2D(data.relativeX / 10, data.relativeY / 10), this.cueBall, onDone);
         });
         this.onMousemove((data) => {
             var _a;
@@ -308,7 +352,7 @@ class Table {
     go(onStop) {
         this.renderNextFrame(() => {
             this.render();
-            if (table.isStatic) {
+            if (this.isStatic) {
                 onStop === null || onStop === void 0 ? void 0 : onStop();
                 return;
             }
@@ -318,12 +362,18 @@ class Table {
     addBall(...balls) {
         balls.forEach(ball => this.balls.add(ball));
     }
+    removeBall(ball) {
+        return this.balls.delete(ball);
+    }
     strikeBall(v, ball = this.cueBall, onStop) {
         if (!ball)
             return;
         ball.vx = v.x;
         ball.vy = v.y;
         this.go(onStop);
+    }
+    addHole(...holes) {
+        holes.forEach(hole => this.holes.add(hole));
     }
     onClick(onClick, relativeBall = this.cueBall) {
         return this.container.addEventListener('click', (e) => {
@@ -375,11 +425,13 @@ class Table {
         for (let step = 0; step < maxRenderSteps; step += 1) {
             this.updateBalls(1 / maxRenderSteps);
             this.handleCollideBalls();
+            this.HandleFallInHoles();
         }
         this.tableRenderer.clear();
         this.tableRenderer.fill((_a = this.styles) === null || _a === void 0 ? void 0 : _a.tableColor);
-        this.renderBalls();
         this.renderBorder();
+        this.renderHoles();
+        this.renderBalls();
     }
     // 计算此帧需要分成多少段处理，以避免速度过快的小球穿过其他球，越多段可以使碰撞更接近真实，但也意味着更多计算量
     getMaxRenderSteps() {
@@ -417,6 +469,16 @@ class Table {
             }
         }
     }
+    HandleFallInHoles() {
+        for (const ball of this.balls) {
+            for (const hole of this.holes) {
+                const isFallIn = ball.fallInHoleMaybe(hole);
+                if (isFallIn) {
+                    this.removeBall(ball);
+                }
+            }
+        }
+    }
     renderBalls() {
         for (const ball of this.balls) {
             this.renderer.tableRenderer.renderBall(ball.x, ball.y, ball.r, ball.color);
@@ -426,23 +488,53 @@ class Table {
         var _a;
         this.renderer.tableRenderer.renderBorder(this.border, (_a = this.styles) === null || _a === void 0 ? void 0 : _a.borderColor);
     }
+    renderHoles() {
+        for (const hole of this.holes) {
+            this.renderer.tableRenderer.renderHole(hole.x, hole.y, hole.r, hole.color);
+        }
+    }
+}
+class Hole {
+    constructor(x, y, r, color = 'black') {
+        this.x = x;
+        this.y = y;
+        this.r = r;
+        this.color = color;
+    }
 }
 // --- test code ---
-const table = new Table({
-    width: 254 * 3,
-    height: 127 * 3,
-    styles: {
-        tableColor: 'olivedrab',
-        borderColor: 'green',
-    }
-}).mount(document.body);
-table.init({
-    cueBall: new Ball({ color: 'white', x: 150, y: 50, vx: 10, vy: 10 }),
-    balls: [
-        new Ball({ x: 300, y: 200 }),
-        new Ball({ x: 300, y: 220 }),
-        new Ball({ x: 300, y: 240 }),
-        new Ball({ x: 300, y: 260 }),
-    ],
-});
-table.start();
+const startGame = () => {
+    const table = new Table({
+        width: 254 * 3,
+        height: 127 * 3,
+        styles: {
+            tableColor: 'olivedrab',
+            borderColor: 'green',
+        }
+    }).mount(document.body);
+    table.init({
+        cueBall: new Ball({ color: 'white', x: 150, y: 50, vx: 10, vy: 10 }),
+        balls: [
+            new Ball({ x: 300, y: 200 }),
+            new Ball({ x: 300, y: 220 }),
+            new Ball({ x: 300, y: 240 }),
+            new Ball({ x: 300, y: 260 }),
+        ],
+        holes: [
+            new Hole(100, 100, 30, '#333'),
+        ],
+    });
+    table.start({
+        onClear() {
+            alert('win');
+            table.unmount();
+            startGame();
+        },
+        onCueBallFall() {
+            alert('lose');
+            table.unmount();
+            startGame();
+        },
+    });
+};
+startGame();
