@@ -1,4 +1,5 @@
 type Position = number; // 坐标 x, y
+type Length = number; // 长度
 type Velocity = number; // 速度 vx, vy
 type Mass = number; // 质量 m
 type Radius = number; // 半径 r
@@ -146,10 +147,10 @@ class Ball {
 }
 
 class Vector2D {
-  x: number;
-  y: number;
+  x: Position;
+  y: Position;
 
-  constructor(x: number, y: number) {
+  constructor(x: Position, y: Position) {
     this.x = x;
     this.y = y;
   }
@@ -207,21 +208,54 @@ const util = {
   formatNum(num: number, min = 0.001) {
     return Math.abs(num) < min ? 0 : num;
   },
+  create2DCanvas(props: {
+    container: HTMLElement;
+    width: Length;
+    height: Length;
+    origin?: [Position, Position];
+    style?: Partial<CSSStyleDeclaration>;
+  }) {
+    const { container, width, height, origin, style } = props;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    Object.assign(canvas.style, style);
+    container.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+    if (origin) {
+      ctx.translate(origin[0], origin[1]);
+    }
+    return ctx;
+  },
 };
 
 class Renderer {
   private ctx: CanvasRenderingContext2D;
-  private width: number;
-  private height: number;
+  private x: Position;
+  private y: Position;
+  private w: Length;
+  private h: Length;
 
-  constructor(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  constructor(ctx: CanvasRenderingContext2D, size: {
+    x: Position;
+    y: Position;
+    w: Length;
+    h: Length;
+  }) {
     this.ctx = ctx;
-    this.width = width;
-    this.height = height;
+    this.x = size.x;
+    this.y = size.y;
+    this.w = size.w;
+    this.h = size.h;
   }
 
   clear() {
-    this.ctx.clearRect(0, 0, this.width, this.height);
+    this.ctx.clearRect(this.x, this.y, this.w, this.h);
+  }
+
+  fill(color: Color) {
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(this.x, this.y, this.w, this.h);
   }
 
   renderBall(x: Position, y: Position, r: Radius, color: Color = 'black') {
@@ -234,7 +268,6 @@ class Renderer {
   }
 
   renderStick(x: Position, y: Position, targetX: Position, targetY: Position, color: Color = 'black') {
-    this.clear();
     const { ctx } = this;
 
     ctx.beginPath();
@@ -258,6 +291,23 @@ class Renderer {
     ctx.strokeStyle = color;
     ctx.stroke();
   }
+
+  renderBorder(border: Length, color: Color = 'gray') {
+    const { ctx } = this;
+
+    ctx.fillStyle = color;
+    ctx.fillRect(this.x, this.y, this.w, border);
+    ctx.fillRect(this.x, this.y, border, this.h);
+    ctx.fillRect(this.x, this.y + this.h - border, this.w, border);
+    ctx.fillRect(this.x + this.w - border, this.y, border, this.h);
+  }
+}
+
+interface TableStyles {
+  containerStyle?: Partial<CSSStyleDeclaration>;
+  borderColor?: Color;
+  stickColor?: Color;
+  tableColor?: Color;
 }
 
 class Table {
@@ -265,56 +315,79 @@ class Table {
   private container: HTMLElement;
   private tableRenderer: Renderer;
   private controlRenderer: Renderer;
-  private balls: Set<Ball>;
-  private width: number;
-  private height: number;
+  private balls: Set<Ball> = new Set();
+  private width: Length;
+  private height: Length;
+  private border: Length;
   private scrollFriction: Friction;
   private edgeElastic: Elastic;
   private renderNextFrame: (render: () => void) => void; // 每帧渲染时机
+  private styles?: TableStyles;
 
   constructor({
     width,
     height,
+    border = 10,
     scrollFriction = 0.01,
     edgeElastic = 0.9,
     renderNextFrame = window.requestAnimationFrame.bind(window),
-    style,
+    styles,
   }: {
-    width: number,
-    height: number,
-    scrollFriction?: Friction,
-    edgeElastic?: Elastic,
-    renderNextFrame?: (render: () => void) => void,
-    style?: Partial<CSSStyleDeclaration>,
+    width: Length;
+    height: Length;
+    border?: Length;
+    scrollFriction?: Friction;
+    edgeElastic?: Elastic;
+    renderNextFrame?: (render: () => void) => void;
+    styles?: TableStyles;
   }) {
-    const tableCanvas = document.createElement('canvas');
-    tableCanvas.width = width;
-    tableCanvas.height = height;
-    this.tableRenderer = new Renderer(tableCanvas.getContext('2d')!, width, height);
-
-    const controlCanvas = document.createElement('canvas');
-    controlCanvas.style.position = 'absolute';
-    controlCanvas.style.top = '0';
-    controlCanvas.style.left = '0';
-    controlCanvas.width = width;
-    controlCanvas.height = height;
-    this.controlRenderer = new Renderer(controlCanvas.getContext('2d')!, width, height);
-
+    const containerWidth = width + border * 2;
+    const containerHeight = height + border * 2;
     const container = document.createElement('div');
-    Object.assign(container.style, style);
-    container.appendChild(tableCanvas);
-    container.appendChild(controlCanvas);
-    this.container = container;
-    container.style.width = `${width}px`;
-    container.style.height = `${height}px`;
+    Object.assign(container.style, styles?.containerStyle);
+    container.style.width = `${containerWidth}px`;
+    container.style.height = `${containerHeight}px`;
     container.style.position = 'relative';
+    this.container = container;
 
-    this.balls = new Set();
+    const tableCtx = util.create2DCanvas({
+      container,
+      width: containerWidth,
+      height: containerHeight,
+      origin: [border, border],
+    });
+    this.tableRenderer = new Renderer(tableCtx, {
+      x: -border,
+      y: -border,
+      w: containerWidth,
+      h: containerHeight,
+    });
+
+    const controlCtx = util.create2DCanvas({
+      container,
+      width: containerWidth,
+      height: containerHeight,
+      origin: [border, border],
+      style: {
+        position: 'absolute',
+        top: '0',
+        left: '0',
+      },
+    });
+    this.controlRenderer = new Renderer(controlCtx, {
+      x: -border,
+      y: -border,
+      w: containerWidth,
+      h: containerHeight,
+    });
+
     this.width = width;
     this.height = height;
+    this.border = border;
     this.scrollFriction = scrollFriction;
     this.edgeElastic = edgeElastic;
     this.renderNextFrame = renderNextFrame;
+    this.styles = styles;
   }
 
   mount(node: HTMLElement) {
@@ -322,7 +395,13 @@ class Table {
     return this;
   }
 
-  init(cueBall: Ball, balls: Ball[]) {
+  init({
+    cueBall,
+    balls = [],
+  }: {
+    cueBall: Ball,
+    balls?: Ball[],
+  }) {
     this.cueBall = cueBall;
     this.addBall(cueBall);
     this.addBall(...balls);
@@ -345,7 +424,8 @@ class Table {
     
     this.onMousemove((data) => {
       if (!this.status.isStatic) return;
-      this.renderer.controlRenderer.renderStick(data.ballX, data.ballY, data.targetX, data.targetY);
+      this.renderer.controlRenderer.clear();
+      this.renderer.controlRenderer.renderStick(data.ballX, data.ballY, data.targetX, data.targetY, this.styles?.stickColor);
     });
   }
 
@@ -353,8 +433,10 @@ class Table {
     return {
       width: this.width,
       height: this.height,
+      border: this.border,
       scrollFriction: this.scrollFriction,
       edgeElastic: this.edgeElastic,
+      styles: this.styles,
     };
   }
 
@@ -463,7 +545,6 @@ class Table {
   }
 
   private render() {
-    this.tableRenderer.clear();
     const maxRenderSteps = this.getMaxRenderSteps();
 
     for (let step = 0; step < maxRenderSteps; step += 1) {
@@ -471,7 +552,10 @@ class Table {
       this.handleCollideBalls();
     }
 
+    this.tableRenderer.clear();
+    this.tableRenderer.fill(this.styles?.tableColor);
     this.renderBalls();
+    this.renderBorder();
   }
 
   // 计算此帧需要分成多少段处理，以避免速度过快的小球穿过其他球，越多段可以使碰撞更接近真实，但也意味着更多计算量
@@ -519,29 +603,35 @@ class Table {
 
   private renderBalls() {
     for (const ball of this.balls) {
-      this.tableRenderer.renderBall(ball.x, ball.y, ball.r, ball.color);
+      this.renderer.tableRenderer.renderBall(ball.x, ball.y, ball.r, ball.color);
     }
   }
+
+  private renderBorder() {
+    this.renderer.tableRenderer.renderBorder(this.border, this.styles?.borderColor);
+  }
 }
+
 
 // --- test code ---
 const table = new Table({
   width: 254 * 3,
   height: 127 * 3,
-  style: {
-    backgroundColor: 'olivedrab',
-  },
+  styles: {
+    tableColor: 'olivedrab',
+    borderColor: 'green',
+  }
 }).mount(document.body);
 
-table.init(
-  new Ball({ color: 'white', x: 150, y: 50, vx: 10, vy: 10 }),
-  [
+table.init({
+  cueBall: new Ball({ color: 'white', x: 150, y: 50, vx: 10, vy: 10 }),
+  balls: [
     new Ball({ x: 300, y: 200 }),
     new Ball({ x: 300, y: 220 }),
     new Ball({ x: 300, y: 240 }),
     new Ball({ x: 300, y: 260 }),
   ],
-);
+});
 
 table.start();
  
