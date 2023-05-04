@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/nossika/billiards-monitor#readme",
   "devDependencies": {
+    "@types/node": "^18.16.3",
     "typescript": "^5.0.4",
     "vite": "^4.3.4"
   }
