@@ -6,7 +6,17 @@ class Hole {
   r: Length;
   color: Color;
   
-  constructor(x: Position, y: Position, r: Length, color: Color = 'black') {
+  constructor({
+    x,
+    y,
+    r,
+    color = 'black',
+  }: {
+    x: Position;
+    y: Position;
+    r: Length;
+    color?: Color;
+  }) {
     this.x = x;
     this.y = y;
     this.r = r;

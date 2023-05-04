@@ -28,6 +28,7 @@ class Table {
   private edgeElastic: Elastic;
   private renderNextFrame: (render: () => void) => void; // 每帧渲染时机
   private styles?: TableStyles;
+  private rounds: number = 0;
 
   constructor({
     width,
@@ -120,41 +121,32 @@ class Table {
     this.addBall(cueBall);
     this.addBall(...balls);
     this.addHole(...holes);
+    this.rounds = 0;
   }
 
   start(events?: {
-    onClear?: () => void;
+    onClear?: (rounds: number) => void;
     onCueBallFall?: () => void;
     onStrike?: (x: Position, y: Position) => void;
-    onReady?: (balls: Set<Ball>) => void;
+    onReady?: (balls: Set<Ball>, rounds: number) => void;
   }) {
     if (!this.cueBall) {
       throw new Error('can not start without a cue ball');
     }
-    this.go(() => events?.onReady?.(this.balls));
-    this.onClick((data) => {
+    this.go(() => events?.onReady?.(this.balls, this.rounds));
+    this.onClick(async (data) => {
       if (!this.status.isStatic) return;
+  
+      await events?.onStrike?.(data.relativeX, data.relativeY);
 
-      const onDone = () => {
-        if (!this.balls.has(this.cueBall)) {
-          events?.onCueBallFall?.();
-          return;
-        }
-
-        if (this.balls.size <= 1) {
-          events?.onClear?.();
-          return;
-        }
-
-        events?.onReady?.(this.balls);
-      };
-
-      events?.onStrike?.(data.relativeX, data.relativeY);
+      this.rounds += 1;
 
       this.strikeBall(
-        new Vector2D(data.relativeX / 10, data.relativeY / 10), 
+        new Vector2D(data.relativeX / 8, data.relativeY / 8), 
         this.cueBall,
-        onDone,
+        async () => {
+          await events?.onReady?.(this.balls, this.rounds);
+        },
       );
     });
     
@@ -190,11 +182,11 @@ class Table {
   }
 
   private go(onStop?: () => void) {
-    this.renderNextFrame(() => {
+    this.renderNextFrame(async () => {
       this.render();
 
       if (this.isStatic) {
-        onStop?.();
+        await onStop?.();
         return;
       }
       this.go(onStop);
@@ -293,8 +285,9 @@ class Table {
 
     for (let step = 0; step < maxRenderSteps; step += 1) {
       this.updateBalls(1 / maxRenderSteps);
+      this.handleFallInHoles();
+      this.handleCollideEdge();
       this.handleCollideBalls();
-      this.HandleFallInHoles();
     }
 
     this.tableRenderer.clear();
@@ -331,8 +324,6 @@ class Table {
     const collidedBalls = new Set();
 
     for (const ball of this.balls) {
-      ball.collideEdgeMaybe({ top: 0, left: 0, bottom: this.height, right: this.width, edgeElastic: this.edgeElastic });
-
       for (const otherBall of this.balls) {
         if (ball === otherBall) continue;
         // 只考虑二球碰撞的场景，碰撞完的球本轮不再处理
@@ -347,7 +338,7 @@ class Table {
     }
   }
 
-  private HandleFallInHoles() {
+  private handleFallInHoles() {
     for (const ball of this.balls) {
       for (const hole of this.holes) {
         const isFallIn = ball.fallInHoleMaybe(hole);
@@ -355,6 +346,12 @@ class Table {
           this.removeBall(ball);
         }
       }
+    }
+  }
+
+  private handleCollideEdge() {
+    for (const ball of this.balls) {
+      ball.collideEdgeMaybe({ top: 0, left: 0, bottom: this.height, right: this.width, edgeElastic: this.edgeElastic });
     }
   }
 

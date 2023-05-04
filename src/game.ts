@@ -4,8 +4,9 @@ import Table from '@/core/table';
 
 const startGame = () => {
   const table = new Table({
-    width: 254 * 3,
-    height: 127 * 3,
+    width: 762,
+    height: 381,
+    border: 10,
     styles: {
       tableColor: 'olivedrab',
       borderColor: 'green',
@@ -21,26 +22,35 @@ const startGame = () => {
       new Ball({ x: 300, y: 260 }),
     ],
     holes: [
-      new Hole(100, 100, 30, '#333'),
+      new Hole({ x: 0, y: 0, r: 36, color: '#333' }),
+      new Hole({ x: 0, y: 381, r: 36, color: '#333' }),
+      new Hole({ x: 762, y: 0, r: 36, color: '#333' }),
+      new Hole({ x: 762, y: 381, r: 36, color: '#333' }),
     ],
   });
   
+  console.log('start a new game~');
+
   table.start({
     onStrike(x, y) {
-      console.log(`strike!!! x: ${x} , y: ${y}`);
+      console.log(`strike!!! x: ${x}, y: ${y}`);
     },
-    onReady(balls: Set<Ball>) {
-      console.log(`remain balls: ${balls.size - 1}`);
-    },
-    onClear() {
-      alert('win');
-      table.unmount();
-      startGame();
-    },
-    onCueBallFall() {
-      alert('lose');
-      table.unmount();
-      startGame();
+    onReady(balls, rounds) {
+      if (!balls.has(table.cueBall)) {
+        alert('lose...');
+        table.unmount();
+        startGame();
+        return;
+      }
+
+      if (balls.size <= 1) {
+        alert(`win!!! cost rounds: ${rounds}`);
+        table.unmount();
+        startGame();
+        return;
+      }
+
+      console.log(`remain balls: ${balls.size - 1}, rounds: ${rounds}`);
     },
   });
 }

@@ -76,12 +76,15 @@ class Ball {
     if (hole.r < this.r) return false;
 
     const distance = util.distance(this.x, this.y, hole.x, hole.y);
+    if (distance > hole.r + this.r) return false;
 
     // 无论运动静止，球整体位于洞内，视为落入
     if (distance < hole.r - this.r) return true;
 
-    // 静止时，球心在洞内，视为落入
-    if (!this.vx && !this.vy && distance < hole.r) return true;
+    const vMerge = Math.sqrt(this.vx ** 2 + this.vy ** 2);
+
+    // 如果速度不快且球心位于洞内，视为落入
+    if (distance < hole.r - vMerge) return true;
 
     return false;
   }

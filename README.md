@@ -5,3 +5,11 @@
 [DEMO](https://nossika.github.io/billiards-monitor/)
 
 可点击桌面来击球，尝试将全部黑球击落洞内来获取胜利。
+
+
+## 开发
+
+```bash
+$ npm i
+$ npm run dev
+```
